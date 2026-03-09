@@ -15,12 +15,46 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import traceback
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
 
 warnings.filterwarnings('ignore')
+
+# ============================================
+# Import statistical libraries with error handling
+# ============================================
+STATS_AVAILABLE = True
+PLOTS_AVAILABLE = True
+DOCX_AVAILABLE = False
+
+try:
+    from scipy import stats
+    from scipy.stats import (
+        pearsonr, spearmanr, kendalltau,
+        ttest_ind, ttest_rel, f_oneway,
+        chi2_contingency, mannwhitneyu, wilcoxon,
+        kruskal, friedmanchisquare,
+        shapiro, normaltest, anderson, levene, bartlett
+    )
+    import statsmodels.api as sm
+    from statsmodels.stats.multicomp import pairwise_tukeyhsd
+except ImportError as e:
+    STATS_AVAILABLE = False
+
+try:
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    # إعدادات الخط العربي للمخططات
+    plt.rcParams['font.family'] = 'Arial'
+    plt.rcParams['axes.unicode_minus'] = False
+except ImportError as e:
+    PLOTS_AVAILABLE = False
+
+try:
+    from docx import Document
+    from docx.shared import Inches, Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
 
 # ============================================
 # CSS for RTL support and better styling
@@ -57,7 +91,7 @@ st.markdown("""
     .stButton > button:hover {
         background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
     }
-
+    
     /* File uploader styling */
     .stFileUploader {
         direction: rtl;
@@ -67,7 +101,16 @@ st.markdown("""
         padding: 20px;
         background-color: #f8f9fa;
     }
-
+    .uploadedFile {
+        direction: rtl;
+        text-align: center;
+        padding: 10px;
+        margin: 10px 0;
+        background: linear-gradient(135deg, #43a047 0%, #2e7d32 100%);
+        color: white;
+        border-radius: 5px;
+    }
+    
     /* Result cards styling */
     .result-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -77,7 +120,7 @@ st.markdown("""
         margin: 10px 0;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-
+    
     /* Likert trend indicators */
     .trend-very-high {
         background: linear-gradient(135deg, #1b5e20 0%, #2e7d32 100%);
@@ -124,7 +167,7 @@ st.markdown("""
         font-weight: bold;
         margin: 5px 0;
     }
-
+    
     /* Contact form styling */
     .contact-info {
         background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
@@ -132,45 +175,18 @@ st.markdown("""
         border-radius: 15px;
         color: white;
         margin: 20px 0;
+        text-align: center;
     }
     .contact-info h3 {
         color: white;
-        text-align: center;
         margin-bottom: 20px;
     }
     .contact-info p {
         color: #e0e0e0;
-        margin: 10px 0;
-        font-size: 1.1em;
+        font-size: 1.2em;
+        line-height: 1.8;
     }
-    .email-link {
-        background: rgba(255,255,255,0.2);
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-        font-size: 1.3em;
-        margin: 15px 0;
-        direction: ltr;
-    }
-    .email-link a {
-        color: #ffd700;
-        text-decoration: none;
-        font-weight: bold;
-    }
-    .email-link a:hover {
-        text-decoration: underline;
-    }
-
-    /* Success message styling */
-    .success-message {
-        background: linear-gradient(135deg, #43a047 0%, #2e7d32 100%);
-        color: white;
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-        margin: 10px 0;
-    }
-
+    
     /* Section headers */
     .section-header {
         background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
@@ -179,36 +195,17 @@ st.markdown("""
         border-radius: 5px;
         margin: 20px 0 10px 0;
     }
+    
+    /* Plot container - LTR for charts */
+    .plot-container {
+        direction: ltr !important;
+        text-align: center !important;
+    }
+    .js-plotly-plot, .plot-container, .stPlotlyChart {
+        direction: ltr !important;
+    }
 </style>
 """, unsafe_allow_html=True)
-
-# ============================================
-# Import statistical libraries with error handling
-# ============================================
-STATS_AVAILABLE = True
-PLOTS_AVAILABLE = True
-
-try:
-    from scipy import stats
-    from scipy.stats import (
-        pearsonr, spearmanr, kendalltau,
-        ttest_ind, ttest_rel, f_oneway,
-        chi2_contingency, mannwhitneyu, wilcoxon,
-        kruskal, friedmanchisquare,
-        shapiro, normaltest, anderson, levene, bartlett
-    )
-    import statsmodels.api as sm
-    from statsmodels.stats.multicomp import pairwise_tukeyhsd
-except ImportError as e:
-    STATS_AVAILABLE = False
-    st.warning(f"⚠️ بعض المكتبات الإحصائية غير متوفرة: {str(e)}")
-
-try:
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-except ImportError as e:
-    PLOTS_AVAILABLE = False
-    st.warning(f"⚠️ مكتبات الرسم غير متوفرة: {str(e)}")
 
 # ============================================
 # Page configuration
@@ -248,20 +245,11 @@ if 'factor_trends' not in st.session_state:
     st.session_state.factor_trends = {}
 if 'uploaded_filename' not in st.session_state:
     st.session_state.uploaded_filename = None
-if 'likert_scale' not in st.session_state:
-    st.session_state.likert_scale = {
-        1: 'غير موافق بشدة',
-        2: 'غير موافق',
-        3: 'محايد',
-        4: 'موافق',
-        5: 'موافق بشدة'
-    }
 
 # ============================================
 # Email configuration
 # ============================================
 CONTACT_EMAIL = "boutoubaamed@gmail.com"
-
 
 # ============================================
 # File upload functions
@@ -286,7 +274,6 @@ def load_csv_with_encoding(file):
     except Exception as e:
         raise Exception(f"تعذر قراءة الملف: {str(e)}")
 
-
 def load_excel_file(file):
     """Load Excel file with error handling"""
     try:
@@ -294,7 +281,6 @@ def load_excel_file(file):
         return df
     except Exception as e:
         raise Exception(f"خطأ في قراءة ملف Excel: {str(e)}")
-
 
 def validate_dataframe(df):
     """Validate the loaded dataframe"""
@@ -314,6 +300,13 @@ def validate_dataframe(df):
 
     return True, issues
 
+def ensure_numeric(df, columns):
+    """Ensure columns are numeric for analysis"""
+    numeric_df = df.copy()
+    for col in columns:
+        if col in numeric_df.columns:
+            numeric_df[col] = pd.to_numeric(numeric_df[col], errors='coerce')
+    return numeric_df
 
 # ============================================
 # Likert scale analysis functions
@@ -321,6 +314,14 @@ def validate_dataframe(df):
 
 def interpret_likert_trend(mean_score):
     """Interpret trend based on Likert scale (1-5)"""
+    if pd.isna(mean_score):
+        return {
+            'trend': 'غير متوفر',
+            'class': 'trend-moderate',
+            'icon': '❓',
+            'description': 'بيانات غير كافية',
+            'color': '#9e9e9e'
+        }
     if mean_score >= 4.5:
         return {
             'trend': 'مرتفع جداً',
@@ -362,7 +363,6 @@ def interpret_likert_trend(mean_score):
             'color': '#b71c1c'
         }
 
-
 def calculate_likert_distribution(data):
     """Calculate distribution across Likert categories"""
     categories = {
@@ -374,9 +374,11 @@ def calculate_likert_distribution(data):
     }
 
     distribution = {}
+    data_clean = data.dropna()
+
     for value, label in categories.items():
-        count = (data.round() == value).sum()
-        percentage = (count / len(data)) * 100
+        count = (data_clean.round() == value).sum()
+        percentage = (count / len(data_clean)) * 100 if len(data_clean) > 0 else 0
         distribution[label] = {
             'count': count,
             'percentage': round(percentage, 1)
@@ -384,13 +386,29 @@ def calculate_likert_distribution(data):
 
     return distribution
 
-
 def calculate_factor_trend(factor_data):
     """Calculate trend for a factor based on Likert scale"""
     results = {}
 
     try:
         data_clean = factor_data.dropna()
+
+        if len(data_clean) == 0:
+            return {
+                'mean': 0,
+                'median': 0,
+                'std': 0,
+                'trend': 'غير متوفر',
+                'trend_class': 'trend-moderate',
+                'icon': '❓',
+                'description': 'بيانات غير كافية',
+                'agreement_percent': 0,
+                'disagreement_percent': 0,
+                'neutral_percent': 0,
+                'distribution': {},
+                'n_cases': 0
+            }
+
         mean_score = data_clean.mean()
         median_score = data_clean.median()
         std_dev = data_clean.std()
@@ -423,10 +441,23 @@ def calculate_factor_trend(factor_data):
         }
 
     except Exception as e:
-        results['error'] = str(e)
+        results = {
+            'mean': 0,
+            'median': 0,
+            'std': 0,
+            'trend': 'خطأ',
+            'trend_class': 'trend-moderate',
+            'icon': '❌',
+            'description': str(e),
+            'agreement_percent': 0,
+            'disagreement_percent': 0,
+            'neutral_percent': 0,
+            'distribution': {},
+            'n_cases': 0,
+            'error': str(e)
+        }
 
     return results
-
 
 # ============================================
 # Statistical test functions
@@ -434,6 +465,8 @@ def calculate_factor_trend(factor_data):
 
 def interpret_p_value(p_value):
     """Interpret p-value"""
+    if pd.isna(p_value):
+        return "غير متاح"
     if p_value < 0.001:
         return "دال إحصائياً بمستوى مرتفع جداً (p < 0.001)"
     elif p_value < 0.01:
@@ -442,7 +475,6 @@ def interpret_p_value(p_value):
         return "دال إحصائياً (p < 0.05)"
     else:
         return "غير دال إحصائياً (p > 0.05)"
-
 
 def check_normality(data):
     """Check normality using Shapiro-Wilk test"""
@@ -460,7 +492,6 @@ def check_normality(data):
         pass
     return None
 
-
 def perform_ttest(group1, group2, name1="المجموعة 1", name2="المجموعة 2"):
     """Perform independent t-test"""
     results = {}
@@ -468,6 +499,10 @@ def perform_ttest(group1, group2, name1="المجموعة 1", name2="المجم�
     try:
         g1 = group1.dropna()
         g2 = group2.dropna()
+
+        if len(g1) < 2 or len(g2) < 2:
+            results['error'] = "عدد المشاهدات غير كافٍ للاختبار"
+            return results
 
         # Descriptive statistics
         results['descriptives'] = {
@@ -485,27 +520,15 @@ def perform_ttest(group1, group2, name1="المجموعة 1", name2="المجم�
             }
         }
 
-        # Check normality
-        results['normality'] = {
-            name1: check_normality(g1),
-            name2: check_normality(g2)
-        }
-
         # Levene's test for homogeneity
         levene_stat, levene_p = levene(g1, g2)
         equal_var = levene_p > 0.05
-
-        results['homogeneity'] = {
-            'levene_statistic': round(levene_stat, 3),
-            'levene_p_value': round(levene_p, 4),
-            'equal_variances': equal_var
-        }
 
         # T-test
         t_stat, t_p = ttest_ind(g1, g2, equal_var=equal_var)
 
         # Cohen's d effect size
-        pooled_std = np.sqrt(((len(g1) - 1) * g1.std() ** 2 + (len(g2) - 1) * g2.std() ** 2) / (len(g1) + len(g2) - 2))
+        pooled_std = np.sqrt(((len(g1)-1)*g1.std()**2 + (len(g2)-1)*g2.std()**2) / (len(g1)+len(g2)-2))
         cohen_d = abs(g1.mean() - g2.mean()) / pooled_std if pooled_std != 0 else 0
 
         results['test'] = {
@@ -531,13 +554,17 @@ def perform_ttest(group1, group2, name1="المجموعة 1", name2="المجم�
 
     return results
 
-
 def perform_anova(groups, group_names):
     """Perform one-way ANOVA"""
     results = {}
 
     try:
         clean_groups = [g.dropna() for g in groups]
+        clean_groups = [g for g in clean_groups if len(g) >= 2]
+
+        if len(clean_groups) < 2:
+            results['error'] = "عدد المجموعات الصالحة غير كافٍ"
+            return results
 
         # Descriptive statistics
         descriptives = []
@@ -549,12 +576,6 @@ def perform_anova(groups, group_names):
                 'الانحراف المعياري': round(group.std(), 3)
             })
         results['descriptives'] = descriptives
-
-        # Check normality for each group
-        normality_results = {}
-        for name, group in zip(group_names, clean_groups):
-            normality_results[name] = check_normality(group)
-        results['normality'] = normality_results
 
         # Levene's test
         levene_stat, levene_p = levene(*clean_groups)
@@ -613,7 +634,6 @@ def perform_anova(groups, group_names):
 
     return results
 
-
 def perform_mannwhitney(group1, group2, name1="المجموعة 1", name2="المجموعة 2"):
     """Perform Mann-Whitney U test"""
     results = {}
@@ -621,6 +641,10 @@ def perform_mannwhitney(group1, group2, name1="المجموعة 1", name2="ال�
     try:
         g1 = group1.dropna()
         g2 = group2.dropna()
+
+        if len(g1) < 2 or len(g2) < 2:
+            results['error'] = "عدد المشاهدات غير كافٍ للاختبار"
+            return results
 
         # Descriptive statistics
         results['descriptives'] = {
@@ -645,7 +669,7 @@ def perform_mannwhitney(group1, group2, name1="المجموعة 1", name2="ال�
 
         # Effect size (r)
         from scipy.stats import norm
-        z_score = norm.ppf(u_p / 2)
+        z_score = norm.ppf(u_p/2)
         n_total = len(g1) + len(g2)
         effect_size = abs(z_score) / np.sqrt(n_total) if z_score != 0 else 0
 
@@ -671,13 +695,17 @@ def perform_mannwhitney(group1, group2, name1="المجموعة 1", name2="ال�
 
     return results
 
-
 def perform_kruskal_wallis(groups, group_names):
     """Perform Kruskal-Wallis test"""
     results = {}
 
     try:
         clean_groups = [g.dropna() for g in groups]
+        clean_groups = [g for g in clean_groups if len(g) >= 2]
+
+        if len(clean_groups) < 2:
+            results['error'] = "عدد المجموعات الصالحة غير كافٍ"
+            return results
 
         # Descriptive statistics
         descriptives = []
@@ -712,7 +740,6 @@ def perform_kruskal_wallis(groups, group_names):
 
     return results
 
-
 def perform_chi_square(observed, var1_name="", var2_name=""):
     """Perform Chi-square test"""
     results = {}
@@ -724,7 +751,7 @@ def perform_chi_square(observed, var1_name="", var2_name=""):
         # Cramer's V effect size
         n = observed.sum().sum()
         min_dim = min(observed.shape) - 1
-        cramer_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 else 0
+        cramer_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 and n > 0 else 0
 
         results['test'] = {
             'chi2': round(chi2, 3),
@@ -749,52 +776,53 @@ def perform_chi_square(observed, var1_name="", var2_name=""):
 
     return results
 
-
 def calculate_cronbach_alpha(df_items):
     """Calculate Cronbach's alpha"""
     try:
-        if len(df_items.columns) < 2:
+        # Convert to numeric and drop rows with any missing values
+        df_numeric = df_items.apply(pd.to_numeric, errors='coerce')
+        df_clean = df_numeric.dropna()
+
+        if len(df_clean.columns) < 2 or len(df_clean) < 2:
             return None
 
-        items = df_items.dropna().values
-        if items.shape[0] > 1:
-            k = items.shape[1]
-            item_variances = np.var(items, axis=0, ddof=1)
-            total_scores = np.sum(items, axis=1)
-            total_variance = np.var(total_scores, ddof=1)
+        items = df_clean.values
+        k = items.shape[1]
+        item_variances = np.var(items, axis=0, ddof=1)
+        total_scores = np.sum(items, axis=1)
+        total_variance = np.var(total_scores, ddof=1)
 
-            if total_variance > 0:
-                alpha = (k / (k - 1)) * (1 - (np.sum(item_variances) / total_variance))
+        if total_variance > 0:
+            alpha = (k / (k - 1)) * (1 - (np.sum(item_variances) / total_variance))
 
-                # Interpret alpha
-                if alpha >= 0.9:
-                    quality = "ممتاز"
-                elif alpha >= 0.8:
-                    quality = "جيد"
-                elif alpha >= 0.7:
-                    quality = "مقبول"
-                elif alpha >= 0.6:
-                    quality = "ضعيف"
-                else:
-                    quality = "غير مقبول"
+            # Interpret alpha
+            if alpha >= 0.9:
+                quality = "ممتاز"
+            elif alpha >= 0.8:
+                quality = "جيد"
+            elif alpha >= 0.7:
+                quality = "مقبول"
+            elif alpha >= 0.6:
+                quality = "ضعيف"
+            else:
+                quality = "غير مقبول"
 
-                return {
-                    'alpha': round(alpha, 3),
-                    'quality': quality,
-                    'n_items': k,
-                    'n_cases': items.shape[0]
-                }
+            return {
+                'alpha': round(alpha, 3),
+                'quality': quality,
+                'n_items': k,
+                'n_cases': len(df_clean)
+            }
 
         return None
 
-    except:
+    except Exception as e:
         return None
-
 
 # ============================================
 # Email sending function
 # ============================================
-def send_email(name, email, message):
+def send_email(name, message):
     """Send email (simulated - saves to session state)"""
     try:
         # Save to session state
@@ -803,16 +831,14 @@ def send_email(name, email, message):
 
         st.session_state.contact_messages.append({
             'name': name,
-            'email': email,
             'message': message,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         })
 
-        return True, "تم إرسال رسالتك بنجاح! سنتواصل معك قريباً على البريد الإلكتروني."
+        return True, "تم إرسال رسالتك بنجاح! شكراً لمساهمتك في تطوير التطبيق."
 
     except Exception as e:
         return False, f"حدث خطأ في الإرسال: {str(e)}"
-
 
 # ============================================
 # Plotting functions
@@ -820,7 +846,7 @@ def send_email(name, email, message):
 
 def create_likert_bar_chart(distribution, title):
     """Create bar chart for Likert distribution"""
-    if not PLOTS_AVAILABLE:
+    if not PLOTS_AVAILABLE or not distribution:
         return None
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -837,14 +863,13 @@ def create_likert_bar_chart(distribution, title):
     # Add percentage labels
     for bar, pct in zip(bars, percentages):
         height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2., height,
-                f'{pct}%', ha='center', va='bottom', fontsize=10)
+        ax.text(bar.get_x() + bar.get_width()/2., height,
+               f'{pct}%', ha='center', va='bottom', fontsize=10)
 
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
 
     return fig
-
 
 def create_comparison_boxplot(groups, group_names, ylabel, title):
     """Create boxplot for group comparison"""
@@ -867,9 +892,87 @@ def create_comparison_boxplot(groups, group_names, ylabel, title):
 
     return fig
 
+# ============================================
+# Word report generation
+# ============================================
+def create_word_report(df, social_vars, factors, factor_trends):
+    """Create Word report with analysis results"""
+    if not DOCX_AVAILABLE:
+        return None
+
+    try:
+        doc = Document()
+
+        # Set document direction to RTL
+        section = doc.sections[0]
+        section.rtl = True
+
+        # Title
+        title = doc.add_heading('تقرير التحليل الإحصائي', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Date
+        doc.add_paragraph(f'تاريخ التقرير: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+        doc.add_paragraph(f'عدد الحالات: {len(df)}')
+        doc.add_paragraph(f'عدد المتغيرات: {len(df.columns)}')
+
+        # Social variables
+        if social_vars:
+            doc.add_heading('المتغيرات الاجتماعية', level=1)
+            for var in social_vars:
+                doc.add_heading(f'تحليل: {var}', level=2)
+                freq = df[var].value_counts()
+                for cat, count in freq.items():
+                    percentage = (count / len(df)) * 100
+                    doc.add_paragraph(f'{cat}: {count} ({percentage:.1f}%)')
+
+        # Factors analysis
+        if factors:
+            doc.add_heading('تحليل المحاور', level=1)
+            df_analysis = df.copy()
+
+            # Convert to numeric for analysis
+            for factor_name, items in factors.items():
+                for item in items:
+                    if item in df_analysis.columns:
+                        df_analysis[item] = pd.to_numeric(df_analysis[item], errors='coerce')
+
+            for factor_name, items in factors.items():
+                # Select only numeric columns that exist
+                valid_items = [item for item in items if item in df_analysis.columns]
+                if valid_items:
+                    df_analysis[factor_name] = df_analysis[valid_items].mean(axis=1)
+
+            for factor_name, items in factors.items():
+                doc.add_heading(f'المحور: {factor_name}', level=2)
+
+                valid_items = [item for item in items if item in df_analysis.columns]
+                if valid_items:
+                    factor_data = df_analysis[valid_items].mean(axis=1).dropna()
+                    trend = factor_trends.get(factor_name, {})
+
+                    doc.add_paragraph(f'المتوسط: {factor_data.mean():.2f}' if len(factor_data) > 0 else 'المتوسط: غير متاح')
+                    doc.add_paragraph(f'الوسيط: {factor_data.median():.2f}' if len(factor_data) > 0 else 'الوسيط: غير متاح')
+                    doc.add_paragraph(f'الانحراف المعياري: {factor_data.std():.2f}' if len(factor_data) > 0 else 'الانحراف المعياري: غير متاح')
+                    doc.add_paragraph(f'الاتجاه: {trend.get("trend", "غير محدد")}')
+                    doc.add_paragraph(f'نسبة الموافقة: {trend.get("agreement_percent", 0)}%')
+
+                    alpha = calculate_cronbach_alpha(df_analysis[valid_items])
+                    if alpha:
+                        doc.add_paragraph(f'معامل الثبات (ألفا كرونباخ): {alpha["alpha"]} - {alpha["quality"]}')
+
+        # Save document
+        doc_bytes = BytesIO()
+        doc.save(doc_bytes)
+        doc_bytes.seek(0)
+        return doc_bytes.getvalue()
+
+    except Exception as e:
+        st.error(f"خطأ في إنشاء تقرير Word: {str(e)}")
+        return None
 
 # ============================================
-# Sidebar - File Upload
+# Sidebar - File Upload with Arabic text
 # ============================================
 with st.sidebar:
     st.markdown("""
@@ -878,11 +981,23 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # File uploader with Arabic text
     uploaded_file = st.file_uploader(
-        "اختر ملف البيانات",
+        "اختر ملف البيانات",  # بالعربية
         type=['xlsx', 'xls', 'csv'],
-        help="الصيغ المدعومة: Excel (.xlsx, .xls) و CSV (.csv)"
+        help="اسحب وأفلت الملف هنا أو اضغط للاختيار"
     )
+
+    # Show uploaded file info in Arabic
+    if uploaded_file is not None:
+        file_size = uploaded_file.size / 1024
+        st.markdown(f"""
+        <div class='uploadedFile'>
+            <strong>الملف المرفوع:</strong> {uploaded_file.name}<br>
+            <strong>الحجم:</strong> {file_size:.1f} كيلوبايت<br>
+            <strong>النوع:</strong> {uploaded_file.type}
+        </div>
+        """, unsafe_allow_html=True)
 
     if st.button("🗑️ مسح الملف", use_container_width=True):
         st.session_state.data_loaded = False
@@ -941,9 +1056,10 @@ if st.session_state.data_loaded:
     # Create tabs
     tabs = st.tabs([
         "📋 تحديد المتغيرات",
-        "📊 تحليل الاتجاه",
+        "📊 تحليل وصفي",
+        "📈 تحليل الاتجاه",
         "🔬 اختبارات معلمية",
-        "📈 اختبارات لا معلمية",
+        "📉 اختبارات لا معلمية",
         "🔄 تحليل متقدم",
         "📥 تصدير النتائج",
         "📞 تواصل معنا"
@@ -954,8 +1070,8 @@ if st.session_state.data_loaded:
     # ============================================
     with tabs[0]:
         st.markdown("""
-        <div style='background-color: #e3f2fd; padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
-            <h4 style='color: #0d47a1;'>🔍 الخطوة الأولى: تحديد المتغيرات الاجتماعية والمحاور</h4>
+        <div class='section-header'>
+            <h3>🔍 تحديد المتغيرات الاجتماعية والمحاور</h3>
         </div>
         """, unsafe_allow_html=True)
 
@@ -996,14 +1112,14 @@ if st.session_state.data_loaded:
 
                         with col1:
                             factor_name = st.text_input(
-                                f"اسم المحور {i + 1}",
-                                value=f"المحور_{i + 1}",
+                                f"اسم المحور {i+1}",
+                                value=f"المحور_{i+1}",
                                 key=f"factor_name_{i}"
                             )
 
                         with col2:
                             factor_items = st.multiselect(
-                                f"اختر فقرات المحور {i + 1}",
+                                f"اختر فقرات المحور {i+1}",
                                 options=items_columns,
                                 key=f"factor_items_{i}"
                             )
@@ -1020,20 +1136,86 @@ if st.session_state.data_loaded:
                         st.balloons()
 
     # ============================================
-    # Tab 2: Trend Analysis (Likert-based)
+    # Tab 2: Descriptive Analysis
     # ============================================
     with tabs[1]:
         if st.session_state.show_results:
             st.markdown("""
-            <div style='background-color: #e8f5e8; padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
-                <h4 style='color: #1b5e20;'>📊 تحليل الاتجاه وفق سلم ليكارت</h4>
+            <div class='section-header'>
+                <h3>📊 التحليل الوصفي</h3>
             </div>
             """, unsafe_allow_html=True)
 
-            # Calculate factor scores
+            # Create a copy and ensure numeric columns for analysis
             df_analysis = df.copy()
-            for factor_name, items in st.session_state.factors.items():
-                df_analysis[factor_name] = df_analysis[items].mean(axis=1)
+
+            # Overall statistics
+            st.markdown("### 📈 إحصائيات عامة")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("إجمالي العينة", len(df))
+            with col2:
+                st.metric("عدد المتغيرات", len(df.columns))
+            with col3:
+                st.metric("عدد المحاور", len(st.session_state.factors))
+            with col4:
+                st.metric("المتغيرات الاجتماعية", len(st.session_state.social_vars))
+
+            # Social variables statistics
+            if st.session_state.social_vars:
+                st.markdown("### 🧑‍🤝‍🧑 المتغيرات الاجتماعية")
+                for var in st.session_state.social_vars:
+                    if var in df.columns:
+                        with st.expander(f"📌 تحليل: {var}"):
+                            freq = df[var].value_counts().reset_index()
+                            freq.columns = [var, 'التكرار']
+                            freq['النسبة %'] = (freq['التكرار'] / len(df) * 100).round(2)
+                            st.dataframe(freq, use_container_width=True)
+
+            # Factors statistics
+            if st.session_state.factors:
+                st.markdown("### 📊 إحصائيات المحاور")
+                factors_stats = []
+                for factor_name, items in st.session_state.factors.items():
+                    # Convert items to numeric and calculate mean
+                    valid_items = []
+                    for item in items:
+                        if item in df.columns:
+                            df_analysis[item] = pd.to_numeric(df_analysis[item], errors='coerce')
+                            if not df_analysis[item].isna().all():
+                                valid_items.append(item)
+
+                    if valid_items:
+                        factor_data = df_analysis[valid_items].mean(axis=1).dropna()
+                        if len(factor_data) > 0:
+                            factors_stats.append({
+                                'المحور': factor_name,
+                                'المتوسط': round(factor_data.mean(), 2),
+                                'الوسيط': round(factor_data.median(), 2),
+                                'الانحراف المعياري': round(factor_data.std(), 2),
+                                'الحد الأدنى': round(factor_data.min(), 2),
+                                'الحد الأقصى': round(factor_data.max(), 2),
+                                'عدد الحالات': len(factor_data)
+                            })
+
+                if factors_stats:
+                    st.dataframe(pd.DataFrame(factors_stats), use_container_width=True)
+                else:
+                    st.warning("⚠️ لا توجد بيانات رقمية كافية للتحليل")
+
+    # ============================================
+    # Tab 3: Trend Analysis (Likert-based)
+    # ============================================
+    with tabs[2]:
+        if st.session_state.show_results:
+            st.markdown("""
+            <div class='section-header'>
+                <h3>📈 تحليل الاتجاه وفق سلم ليكارت</h3>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Create a copy and ensure numeric columns
+            df_analysis = df.copy()
 
             # Likert scale explanation
             with st.expander("ℹ️ سلم ليكارت (1-5)"):
@@ -1043,7 +1225,7 @@ if st.session_state.data_loaded:
                 - **3**: محايد
                 - **4**: موافق
                 - **5**: موافق بشدة
-
+                
                 **تفسير المتوسطات:**
                 - 4.5 - 5.0: موافقة قوية جداً (اتجاه مرتفع جداً)
                 - 3.5 - 4.49: موافقة (اتجاه مرتفع)
@@ -1054,83 +1236,105 @@ if st.session_state.data_loaded:
 
             # Analyze each factor
             for factor_name, items in st.session_state.factors.items():
-                st.markdown(f"### 📈 تحليل المحور: {factor_name}")
+                st.markdown(f"### 📊 المحور: {factor_name}")
 
-                factor_data = df_analysis[factor_name].dropna()
-
-                # Calculate trend
-                trend = calculate_factor_trend(factor_data)
-                st.session_state.factor_trends[factor_name] = trend
-
-                # Display trend
-                col1, col2 = st.columns([1, 2])
-
-                with col1:
-                    st.markdown(f"""
-                    <div class='{trend["trend_class"]}'>
-                        <h3>{trend["icon"]} الاتجاه: {trend["trend"]}</h3>
-                        <p>{trend["description"]}</p>
-                        <hr>
-                        <p>المتوسط: {trend["mean"]}</p>
-                        <p>الوسيط: {trend["median"]}</p>
-                        <p>الانحراف: {trend["std"]}</p>
-                        <p>عدد الحالات: {trend["n_cases"]}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col2:
-                    st.markdown(f"""
-                    <div style='background: white; padding: 15px; border-radius: 10px;'>
-                        <h4>توزيع الاستجابات</h4>
-                        <p>✅ موافق (4+5): {trend["agreement_percent"]}%</p>
-                        <p>➖ محايد (3): {trend["neutral_percent"]}%</p>
-                        <p>❌ غير موافق (1+2): {trend["disagreement_percent"]}%</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # Distribution chart
-                if PLOTS_AVAILABLE:
-                    fig = create_likert_bar_chart(trend['distribution'], f'توزيع استجابات {factor_name}')
-                    if fig:
-                        st.pyplot(fig)
-                        plt.close()
-
-                # Items analysis
-                st.markdown("#### 📝 تحليل الفقرات")
-                items_data = []
+                # Convert items to numeric
+                valid_items = []
                 for item in items:
-                    item_data = df_analysis[item].dropna()
-                    item_trend = interpret_likert_trend(item_data.mean())
-                    items_data.append({
-                        'الفقرة': item,
-                        'المتوسط': round(item_data.mean(), 2),
-                        'الانحراف': round(item_data.std(), 2),
-                        'الاتجاه': item_trend['trend']
-                    })
+                    if item in df.columns:
+                        df_analysis[item] = pd.to_numeric(df_analysis[item], errors='coerce')
+                        if not df_analysis[item].isna().all():
+                            valid_items.append(item)
 
-                st.dataframe(pd.DataFrame(items_data), use_container_width=True)
+                if valid_items:
+                    factor_data = df_analysis[valid_items].mean(axis=1)
 
-                # Reliability
-                alpha = calculate_cronbach_alpha(df_analysis[items])
-                if alpha:
-                    st.info(f"معامل الثبات (ألفا كرونباخ): {alpha['alpha']} - {alpha['quality']}")
+                    # Calculate trend
+                    trend = calculate_factor_trend(factor_data)
+                    st.session_state.factor_trends[factor_name] = trend
+
+                    # Display trend
+                    col1, col2 = st.columns([1, 1])
+
+                    with col1:
+                        st.markdown(f"""
+                        <div class='{trend["trend_class"]}'>
+                            <h3>{trend["icon"]} {trend["trend"]}</h3>
+                            <p>{trend["description"]}</p>
+                            <hr>
+                            <p>المتوسط: {trend["mean"]}</p>
+                            <p>الوسيط: {trend["median"]}</p>
+                            <p>الانحراف: {trend["std"]}</p>
+                            <p>ن = {trend["n_cases"]}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    with col2:
+                        st.markdown(f"""
+                        <div style='background: white; padding: 15px; border-radius: 10px;'>
+                            <h4>توزيع الاستجابات</h4>
+                            <p style='color: #2e7d32;'>✅ موافق (4+5): {trend["agreement_percent"]}%</p>
+                            <p style='color: #f9a825;'>➖ محايد (3): {trend["neutral_percent"]}%</p>
+                            <p style='color: #c62828;'>❌ غير موافق (1+2): {trend["disagreement_percent"]}%</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    # Distribution chart
+                    if PLOTS_AVAILABLE and trend['distribution']:
+                        fig = create_likert_bar_chart(trend['distribution'], f'توزيع استجابات {factor_name}')
+                        if fig:
+                            st.pyplot(fig)
+                            plt.close()
+
+                    # Items analysis
+                    st.markdown("#### 📝 تحليل الفقرات")
+                    items_data = []
+                    for item in valid_items:
+                        item_data = df_analysis[item].dropna()
+                        if len(item_data) > 0:
+                            item_trend = interpret_likert_trend(item_data.mean())
+                            items_data.append({
+                                'الفقرة': item,
+                                'المتوسط': round(item_data.mean(), 2),
+                                'الانحراف': round(item_data.std(), 2),
+                                'الاتجاه': item_trend['trend']
+                            })
+
+                    if items_data:
+                        st.dataframe(pd.DataFrame(items_data), use_container_width=True)
+
+                    # Reliability
+                    alpha = calculate_cronbach_alpha(df_analysis[valid_items])
+                    if alpha:
+                        st.info(f"معامل الثبات (ألفا كرونباخ): {alpha['alpha']} - {alpha['quality']}")
+                else:
+                    st.warning(f"⚠️ لا توجد بيانات رقمية صالحة لتحليل المحور {factor_name}")
 
                 st.markdown("---")
 
     # ============================================
-    # Tab 3: Parametric Tests
+    # Tab 4: Parametric Tests
     # ============================================
-    with tabs[2]:
+    with tabs[3]:
         if st.session_state.show_results and STATS_AVAILABLE:
             st.markdown("""
-            <div style='background-color: #fff3e0; padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
-                <h4 style='color: #bf360c;'>🔬 الاختبارات المعلمية</h4>
+            <div class='section-header'>
+                <h3>🔬 الاختبارات المعلمية</h3>
             </div>
             """, unsafe_allow_html=True)
 
+            # Create a copy and ensure numeric columns
             df_analysis = df.copy()
             for factor_name, items in st.session_state.factors.items():
-                df_analysis[factor_name] = df_analysis[items].mean(axis=1)
+                for item in items:
+                    if item in df_analysis.columns:
+                        df_analysis[item] = pd.to_numeric(df_analysis[item], errors='coerce')
+
+            # Calculate factor scores
+            for factor_name, items in st.session_state.factors.items():
+                valid_items = [item for item in items if item in df_analysis.columns]
+                if valid_items:
+                    df_analysis[factor_name] = df_analysis[valid_items].mean(axis=1)
 
             if not st.session_state.factors:
                 st.warning("⚠️ الرجاء تحديد المحاور أولاً")
@@ -1139,7 +1343,7 @@ if st.session_state.data_loaded:
             else:
                 test_type = st.radio(
                     "اختر نوع التحليل",
-                    ["اختبار T لعينتين مستقلتين", "تحليل التباين الأحادي (ANOVA)"],
+                    ["اختبار T", "تحليل التباين (ANOVA)"],
                     horizontal=True
                 )
 
@@ -1153,127 +1357,145 @@ if st.session_state.data_loaded:
                     options=st.session_state.social_vars
                 )
 
-                groups = df_analysis[selected_var].dropna().unique()
+                if selected_var in df_analysis.columns:
+                    groups = df_analysis[selected_var].dropna().unique()
 
-                if test_type == "اختبار T لعينتين مستقلتين":
-                    if len(groups) == 2:
-                        group1 = df_analysis[df_analysis[selected_var] == groups[0]][selected_factor]
-                        group2 = df_analysis[df_analysis[selected_var] == groups[1]][selected_factor]
+                    if test_type == "اختبار T":
+                        if len(groups) == 2:
+                            group1 = df_analysis[df_analysis[selected_var] == groups[0]][selected_factor].dropna()
+                            group2 = df_analysis[df_analysis[selected_var] == groups[1]][selected_factor].dropna()
 
-                        results = perform_ttest(group1, group2, str(groups[0]), str(groups[1]))
+                            if len(group1) >= 2 and len(group2) >= 2:
+                                results = perform_ttest(group1, group2, str(groups[0]), str(groups[1]))
 
-                        if 'error' not in results:
-                            # Display results
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.info(f"**{groups[0]}**")
-                                st.write(f"ن = {results['descriptives'][str(groups[0])]['n']}")
-                                st.write(f"م = {results['descriptives'][str(groups[0])]['mean']}")
-                                st.write(f"ع = {results['descriptives'][str(groups[0])]['std']}")
+                                if 'error' not in results:
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.info(f"**{groups[0]}**")
+                                        st.write(f"ن = {results['descriptives'][str(groups[0])]['n']}")
+                                        st.write(f"م = {results['descriptives'][str(groups[0])]['mean']}")
+                                        st.write(f"ع = {results['descriptives'][str(groups[0])]['std']}")
 
-                            with col2:
-                                st.info(f"**{groups[1]}**")
-                                st.write(f"ن = {results['descriptives'][str(groups[1])]['n']}")
-                                st.write(f"م = {results['descriptives'][str(groups[1])]['mean']}")
-                                st.write(f"ع = {results['descriptives'][str(groups[1])]['std']}")
+                                    with col2:
+                                        st.info(f"**{groups[1]}**")
+                                        st.write(f"ن = {results['descriptives'][str(groups[1])]['n']}")
+                                        st.write(f"م = {results['descriptives'][str(groups[1])]['mean']}")
+                                        st.write(f"ع = {results['descriptives'][str(groups[1])]['std']}")
 
-                            st.markdown("#### 📊 نتائج الاختبار")
-                            test = results['test']
+                                    st.markdown("#### 📊 نتائج الاختبار")
+                                    test = results['test']
 
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("قيمة T", test['t_statistic'])
-                            with col2:
-                                st.metric("درجات الحرية", test['df'])
-                            with col3:
-                                st.metric("P-value", test['p_value'])
-                            with col4:
-                                if test['significant']:
-                                    st.success("دال")
+                                    col1, col2, col3, col4 = st.columns(4)
+                                    with col1:
+                                        st.metric("قيمة T", test['t_statistic'])
+                                    with col2:
+                                        st.metric("درجات الحرية", test['df'])
+                                    with col3:
+                                        st.metric("P-value", test['p_value'])
+                                    with col4:
+                                        if test['significant']:
+                                            st.success("دال")
+                                        else:
+                                            st.warning("غير دال")
+
+                                    st.info(f"📈 حجم التأثير (Cohen's d): {test['effect_size']}")
+                                    st.success(f"💡 {results['conclusion']}")
+
+                                    if PLOTS_AVAILABLE:
+                                        fig = create_comparison_boxplot(
+                                            [group1, group2],
+                                            [str(groups[0]), str(groups[1])],
+                                            selected_factor,
+                                            f'مقارنة {selected_factor}'
+                                        )
+                                        if fig:
+                                            st.pyplot(fig)
+                                            plt.close()
                                 else:
-                                    st.warning("غير دال")
-
-                            st.info(f"📈 حجم التأثير (Cohen's d): {test['effect_size']}")
-                            st.success(f"💡 {results['conclusion']}")
-
-                            # Plot
-                            if PLOTS_AVAILABLE:
-                                fig = create_comparison_boxplot(
-                                    [group1.dropna(), group2.dropna()],
-                                    [str(groups[0]), str(groups[1])],
-                                    selected_factor,
-                                    f'مقارنة {selected_factor}'
-                                )
-                                if fig:
-                                    st.pyplot(fig)
-                                    plt.close()
-
+                                    st.error(f"خطأ: {results['error']}")
+                            else:
+                                st.warning("⚠️ عدد المشاهدات غير كافٍ في إحدى المجموعات")
                         else:
-                            st.error(f"خطأ: {results['error']}")
+                            st.warning(f"⚠️ يحتاج اختبار T إلى متغير بفئتين")
 
-                    else:
-                        st.warning(f"⚠️ يحتاج اختبار T إلى متغير بفئتين. الفئات الموجودة: {list(groups)}")
+                    else:  # ANOVA
+                        if len(groups) >= 2:
+                            groups_list = []
+                            valid_groups = []
+                            for group in groups:
+                                group_data = df_analysis[df_analysis[selected_var] == group][selected_factor].dropna()
+                                if len(group_data) >= 2:
+                                    groups_list.append(group_data)
+                                    valid_groups.append(str(group))
 
-                else:  # ANOVA
-                    if len(groups) >= 2:
-                        groups_list = [df_analysis[df_analysis[selected_var] == group][selected_factor] for group in
-                                       groups]
+                            if len(groups_list) >= 2:
+                                results = perform_anova(groups_list, valid_groups)
 
-                        results = perform_anova(groups_list, [str(g) for g in groups])
+                                if 'error' not in results:
+                                    st.dataframe(pd.DataFrame(results['descriptives']), use_container_width=True)
 
-                        if 'error' not in results:
-                            st.dataframe(pd.DataFrame(results['descriptives']), use_container_width=True)
+                                    test = results['test']
 
-                            test = results['test']
+                                    col1, col2, col3, col4 = st.columns(4)
+                                    with col1:
+                                        st.metric("قيمة F", test['f_statistic'])
+                                    with col2:
+                                        st.metric("درجات الحرية", f"{test['df_between']},{test['df_within']}")
+                                    with col3:
+                                        st.metric("P-value", test['p_value'])
+                                    with col4:
+                                        if test['significant']:
+                                            st.success("دال")
+                                        else:
+                                            st.warning("غير دال")
 
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("قيمة F", test['f_statistic'])
-                            with col2:
-                                st.metric("درجات الحرية", f"{test['df_between']},{test['df_within']}")
-                            with col3:
-                                st.metric("P-value", test['p_value'])
-                            with col4:
-                                if test['significant']:
-                                    st.success("دال")
+                                    st.info(f"📈 حجم التأثير (Eta-squared): {test['effect_size']}")
+                                    st.success(f"💡 {results['conclusion']}")
+
+                                    if 'posthoc' in results:
+                                        st.markdown("#### 🔍 المقارنات البعدية")
+                                        st.dataframe(pd.DataFrame(results['posthoc']), use_container_width=True)
+
+                                    if PLOTS_AVAILABLE:
+                                        fig = create_comparison_boxplot(
+                                            groups_list,
+                                            valid_groups,
+                                            selected_factor,
+                                            'مقارنة المجموعات'
+                                        )
+                                        if fig:
+                                            st.pyplot(fig)
+                                            plt.close()
                                 else:
-                                    st.warning("غير دال")
-
-                            st.info(f"📈 حجم التأثير (Eta-squared): {test['effect_size']}")
-                            st.success(f"💡 {results['conclusion']}")
-
-                            if 'posthoc' in results:
-                                st.markdown("#### 🔍 المقارنات البعدية")
-                                st.dataframe(pd.DataFrame(results['posthoc']), use_container_width=True)
-
-                            if PLOTS_AVAILABLE:
-                                fig = create_comparison_boxplot(
-                                    [g.dropna().values for g in groups_list],
-                                    [str(g) for g in groups],
-                                    selected_factor,
-                                    'مقارنة المجموعات'
-                                )
-                                if fig:
-                                    st.pyplot(fig)
-                                    plt.close()
-
+                                    st.error(f"خطأ: {results['error']}")
+                            else:
+                                st.warning("⚠️ لا توجد مجموعات ببيانات كافية للتحليل")
                         else:
-                            st.error(f"خطأ: {results['error']}")
+                            st.warning(f"⚠️ المتغير {selected_var} لا يحتوي على مجموعات كافية")
 
     # ============================================
-    # Tab 4: Non-parametric Tests
+    # Tab 5: Non-parametric Tests
     # ============================================
-    with tabs[3]:
+    with tabs[4]:
         if st.session_state.show_results and STATS_AVAILABLE:
             st.markdown("""
-            <div style='background-color: #e8eaf6; padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
-                <h4 style='color: #1a237e;'>📈 الاختبارات اللامعلمية</h4>
+            <div class='section-header'>
+                <h3>📉 الاختبارات اللامعلمية</h3>
             </div>
             """, unsafe_allow_html=True)
 
+            # Create a copy and ensure numeric columns
             df_analysis = df.copy()
             for factor_name, items in st.session_state.factors.items():
-                df_analysis[factor_name] = df_analysis[items].mean(axis=1)
+                for item in items:
+                    if item in df_analysis.columns:
+                        df_analysis[item] = pd.to_numeric(df_analysis[item], errors='coerce')
+
+            # Calculate factor scores
+            for factor_name, items in st.session_state.factors.items():
+                valid_items = [item for item in items if item in df_analysis.columns]
+                if valid_items:
+                    df_analysis[factor_name] = df_analysis[valid_items].mean(axis=1)
 
             if not st.session_state.factors:
                 st.warning("⚠️ الرجاء تحديد المحاور أولاً")
@@ -1299,50 +1521,50 @@ if st.session_state.data_loaded:
                         key="mw_var"
                     )
 
-                    groups = df_analysis[selected_var].unique()
+                    if selected_var in df_analysis.columns:
+                        groups = df_analysis[selected_var].unique()
 
-                    if len(groups) == 2:
-                        group1 = df_analysis[df_analysis[selected_var] == groups[0]][selected_factor]
-                        group2 = df_analysis[df_analysis[selected_var] == groups[1]][selected_factor]
+                        if len(groups) == 2:
+                            group1 = df_analysis[df_analysis[selected_var] == groups[0]][selected_factor].dropna()
+                            group2 = df_analysis[df_analysis[selected_var] == groups[1]][selected_factor].dropna()
 
-                        results = perform_mannwhitney(group1, group2, str(groups[0]), str(groups[1]))
+                            if len(group1) >= 2 and len(group2) >= 2:
+                                results = perform_mannwhitney(group1, group2, str(groups[0]), str(groups[1]))
 
-                        if 'error' not in results:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.info(f"**{groups[0]}**")
-                                st.write(f"ن = {results['descriptives'][str(groups[0])]['n']}")
-                                st.write(f"الوسيط = {results['descriptives'][str(groups[0])]['median']}")
-                                st.write(
-                                    f"الربيعي = {results['descriptives'][str(groups[0])]['q1']} - {results['descriptives'][str(groups[0])]['q3']}")
+                                if 'error' not in results:
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.info(f"**{groups[0]}**")
+                                        st.write(f"ن = {results['descriptives'][str(groups[0])]['n']}")
+                                        st.write(f"الوسيط = {results['descriptives'][str(groups[0])]['median']}")
+                                        st.write(f"الربيعي = {results['descriptives'][str(groups[0])]['q1']} - {results['descriptives'][str(groups[0])]['q3']}")
 
-                            with col2:
-                                st.info(f"**{groups[1]}**")
-                                st.write(f"ن = {results['descriptives'][str(groups[1])]['n']}")
-                                st.write(f"الوسيط = {results['descriptives'][str(groups[1])]['median']}")
-                                st.write(
-                                    f"الربيعي = {results['descriptives'][str(groups[1])]['q1']} - {results['descriptives'][str(groups[1])]['q3']}")
+                                    with col2:
+                                        st.info(f"**{groups[1]}**")
+                                        st.write(f"ن = {results['descriptives'][str(groups[1])]['n']}")
+                                        st.write(f"الوسيط = {results['descriptives'][str(groups[1])]['median']}")
+                                        st.write(f"الربيعي = {results['descriptives'][str(groups[1])]['q1']} - {results['descriptives'][str(groups[1])]['q3']}")
 
-                            test = results['test']
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("قيمة U", test['u_statistic'])
-                            with col2:
-                                st.metric("P-value", test['p_value'])
-                            with col3:
-                                if test['significant']:
-                                    st.success("دال")
+                                    test = results['test']
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric("قيمة U", test['u_statistic'])
+                                    with col2:
+                                        st.metric("P-value", test['p_value'])
+                                    with col3:
+                                        if test['significant']:
+                                            st.success("دال")
+                                        else:
+                                            st.warning("غير دال")
+
+                                    st.info(f"📈 حجم التأثير (r): {test['effect_size']}")
+                                    st.success(f"💡 {results['conclusion']}")
                                 else:
-                                    st.warning("غير دال")
-
-                            st.info(f"📈 حجم التأثير (r): {test['effect_size']}")
-                            st.success(f"💡 {results['conclusion']}")
-
+                                    st.error(f"خطأ: {results['error']}")
+                            else:
+                                st.warning("⚠️ عدد المشاهدات غير كافٍ في إحدى المجموعات")
                         else:
-                            st.error(f"خطأ: {results['error']}")
-
-                    else:
-                        st.warning(f"⚠️ اختبار مان-ويتني يحتاج إلى متغير بفئتين")
+                            st.warning(f"⚠️ اختبار مان-ويتني يحتاج إلى متغير بفئتين")
 
                 elif test_type == "كروسكال-واليس":
                     selected_factor = st.selectbox(
@@ -1357,35 +1579,43 @@ if st.session_state.data_loaded:
                         key="kw_var"
                     )
 
-                    groups = df_analysis[selected_var].unique()
+                    if selected_var in df_analysis.columns:
+                        groups = df_analysis[selected_var].unique()
 
-                    if len(groups) >= 2:
-                        groups_list = [df_analysis[df_analysis[selected_var] == group][selected_factor] for group in
-                                       groups]
+                        if len(groups) >= 2:
+                            groups_list = []
+                            valid_groups = []
+                            for group in groups:
+                                group_data = df_analysis[df_analysis[selected_var] == group][selected_factor].dropna()
+                                if len(group_data) >= 2:
+                                    groups_list.append(group_data)
+                                    valid_groups.append(str(group))
 
-                        results = perform_kruskal_wallis(groups_list, [str(g) for g in groups])
+                            if len(groups_list) >= 2:
+                                results = perform_kruskal_wallis(groups_list, valid_groups)
 
-                        if 'error' not in results:
-                            st.dataframe(pd.DataFrame(results['descriptives']), use_container_width=True)
+                                if 'error' not in results:
+                                    st.dataframe(pd.DataFrame(results['descriptives']), use_container_width=True)
 
-                            test = results['test']
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("قيمة H", test['h_statistic'])
-                            with col2:
-                                st.metric("درجات الحرية", test['df'])
-                            with col3:
-                                st.metric("P-value", test['p_value'])
+                                    test = results['test']
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric("قيمة H", test['h_statistic'])
+                                    with col2:
+                                        st.metric("درجات الحرية", test['df'])
+                                    with col3:
+                                        st.metric("P-value", test['p_value'])
 
-                            if test['significant']:
-                                st.success("✅ توجد فروق دالة")
+                                    if test['significant']:
+                                        st.success("✅ توجد فروق دالة")
+                                    else:
+                                        st.warning("⚠️ لا توجد فروق دالة")
+
+                                    st.success(f"💡 {results['conclusion']}")
+                                else:
+                                    st.error(f"خطأ: {results['error']}")
                             else:
-                                st.warning("⚠️ لا توجد فروق دالة")
-
-                            st.success(f"💡 {results['conclusion']}")
-
-                        else:
-                            st.error(f"خطأ: {results['error']}")
+                                st.warning("⚠️ لا توجد مجموعات ببيانات كافية للتحليل")
 
                 else:  # Chi-square
                     if len(st.session_state.social_vars) >= 2:
@@ -1426,13 +1656,13 @@ if st.session_state.data_loaded:
                             st.success(f"💡 {results['conclusion']}")
 
     # ============================================
-    # Tab 5: Advanced Analysis
+    # Tab 6: Advanced Analysis
     # ============================================
-    with tabs[4]:
+    with tabs[5]:
         if st.session_state.show_results:
             st.markdown("""
-            <div style='background-color: #f3e5f5; padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
-                <h4 style='color: #4a148c;'>🔄 تحليل متقدم</h4>
+            <div class='section-header'>
+                <h3>🔄 تحليل متقدم</h3>
             </div>
             """, unsafe_allow_html=True)
 
@@ -1442,57 +1672,83 @@ if st.session_state.data_loaded:
                 horizontal=True
             )
 
+            # Create a copy and ensure numeric columns
             df_analysis = df.copy()
             for factor_name, items in st.session_state.factors.items():
-                df_analysis[factor_name] = df_analysis[items].mean(axis=1)
+                for item in items:
+                    if item in df_analysis.columns:
+                        df_analysis[item] = pd.to_numeric(df_analysis[item], errors='coerce')
+
+            # Calculate factor scores
+            for factor_name, items in st.session_state.factors.items():
+                valid_items = [item for item in items if item in df_analysis.columns]
+                if valid_items:
+                    df_analysis[factor_name] = df_analysis[valid_items].mean(axis=1)
 
             if analysis_type == "📊 مصفوفة الارتباطات":
                 if len(st.session_state.factors) >= 2:
-                    factors_df = pd.DataFrame({name: df_analysis[name] for name in st.session_state.factors.keys()})
+                    # Create factors dataframe with only numeric columns
+                    factors_data = {}
+                    for name in st.session_state.factors.keys():
+                        if name in df_analysis.columns:
+                            factors_data[name] = df_analysis[name].dropna()
 
-                    corr_type = st.radio("نوع الارتباط", ["بيرسون", "سبيرمان"], horizontal=True)
+                    if len(factors_data) >= 2:
+                        factors_df = pd.DataFrame(factors_data)
 
-                    if corr_type == "بيرسون":
-                        corr_matrix = factors_df.corr()
-                        method = "بيرسون"
+                        corr_type = st.radio("نوع الارتباط", ["بيرسون", "سبيرمان"], horizontal=True)
+
+                        if corr_type == "بيرسون":
+                            corr_matrix = factors_df.corr()
+                            method = "بيرسون"
+                        else:
+                            corr_matrix = factors_df.corr(method='spearman')
+                            method = "سبيرمان"
+
+                        st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm').format("{:.3f}"),
+                                   use_container_width=True)
+
+                        if PLOTS_AVAILABLE:
+                            fig, ax = plt.subplots(figsize=(10, 8))
+                            sns.heatmap(corr_matrix, annot=True, fmt='.3f', cmap='RdBu_r', center=0, ax=ax)
+                            ax.set_title(f'مصفوفة ارتباطات {method}')
+                            st.pyplot(fig)
+                            plt.close()
                     else:
-                        corr_matrix = factors_df.corr(method='spearman')
-                        method = "سبيرمان"
-
-                    st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm').format("{:.3f}"),
-                                 use_container_width=True)
-
-                    if PLOTS_AVAILABLE:
-                        fig, ax = plt.subplots(figsize=(10, 8))
-                        sns.heatmap(corr_matrix, annot=True, fmt='.3f', cmap='RdBu_r', center=0, ax=ax)
-                        ax.set_title(f'مصفوفة ارتباطات {method}')
-                        st.pyplot(fig)
-                        plt.close()
+                        st.warning("⚠️ لا توجد بيانات كافية لحساب الارتباطات")
 
             elif analysis_type == "📈 الانحدار الخطي":
                 if len(st.session_state.factors) >= 2 and STATS_AVAILABLE:
                     dependent = st.selectbox("المتغير التابع", options=list(st.session_state.factors.keys()))
                     independent = st.multiselect("المتغيرات المستقلة",
-                                                 [f for f in st.session_state.factors.keys() if f != dependent])
+                                                [f for f in st.session_state.factors.keys() if f != dependent])
 
-                    if independent:
-                        X = df_analysis[independent].dropna()
-                        y = df_analysis.loc[X.index, dependent]
-                        X = sm.add_constant(X)
+                    if independent and dependent in df_analysis.columns:
+                        # Prepare data
+                        valid_independent = [v for v in independent if v in df_analysis.columns]
+                        if valid_independent:
+                            data_for_reg = df_analysis[valid_independent + [dependent]].dropna()
 
-                        model = sm.OLS(y, X).fit()
+                            if len(data_for_reg) > len(valid_independent) + 1:
+                                X = data_for_reg[valid_independent]
+                                y = data_for_reg[dependent]
+                                X = sm.add_constant(X)
 
-                        st.write(f"**R-squared:** {model.rsquared:.3f}")
-                        st.write(f"**R-squared المعدل:** {model.rsquared_adj:.3f}")
-                        st.write(f"**F-statistic:** {model.fvalue:.3f}")
-                        st.write(f"**P-value (F):** {model.f_pvalue:.4f}")
+                                model = sm.OLS(y, X).fit()
 
-                        coef_df = pd.DataFrame({
-                            'المتغير': model.params.index,
-                            'المعامل': model.params.values.round(3),
-                            'P-value': model.pvalues.values.round(4)
-                        })
-                        st.dataframe(coef_df, use_container_width=True)
+                                st.write(f"**R-squared:** {model.rsquared:.3f}")
+                                st.write(f"**R-squared المعدل:** {model.rsquared_adj:.3f}")
+                                st.write(f"**F-statistic:** {model.fvalue:.3f}")
+                                st.write(f"**P-value (F):** {model.f_pvalue:.4f}")
+
+                                coef_df = pd.DataFrame({
+                                    'المتغير': model.params.index,
+                                    'المعامل': model.params.values.round(3),
+                                    'P-value': model.pvalues.values.round(4)
+                                })
+                                st.dataframe(coef_df, use_container_width=True)
+                            else:
+                                st.warning("⚠️ بيانات غير كافية للانحدار الخطي")
 
             else:  # Factor Analysis
                 st.info("🔧 تحليل العوامل يتطلب مكتبة scikit-learn")
@@ -1505,9 +1761,10 @@ if st.session_state.data_loaded:
                         all_items.extend(items)
 
                     if len(all_items) >= 3:
-                        df_factors = df[all_items].dropna()
+                        # Convert to numeric
+                        df_factors = df[all_items].apply(pd.to_numeric, errors='coerce').dropna()
 
-                        if len(df_factors) > 0:
+                        if len(df_factors) > 10:  # Need sufficient sample
                             scaler = StandardScaler()
                             df_scaled = scaler.fit_transform(df_factors)
 
@@ -1519,88 +1776,146 @@ if st.session_state.data_loaded:
                             loadings = pd.DataFrame(
                                 fa.components_.T,
                                 index=all_items,
-                                columns=[f'عامل{i + 1}' for i in range(n_factors)]
+                                columns=[f'عامل{i+1}' for i in range(n_factors)]
                             )
 
                             st.dataframe(loadings.style.background_gradient(cmap='coolwarm').format("{:.3f}"),
-                                         use_container_width=True)
+                                       use_container_width=True)
+                        else:
+                            st.warning("⚠️ البيانات غير كافية لتحليل العوامل")
 
                 except ImportError:
                     st.info("لتشغيل تحليل العوامل: pip install scikit-learn")
 
     # ============================================
-    # Tab 6: Export Results
+    # Tab 7: Export Results
     # ============================================
-    with tabs[5]:
+    with tabs[6]:
         if st.session_state.show_results:
             st.markdown("""
-            <div style='background-color: #e0f2f1; padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
-                <h4 style='color: #00695c;'>📥 تصدير النتائج</h4>
+            <div class='section-header'>
+                <h3>📥 تصدير النتائج</h3>
             </div>
             """, unsafe_allow_html=True)
 
             export_format = st.radio(
                 "اختر صيغة التصدير",
-                ["📄 CSV", "📊 Excel"],
+                ["📄 CSV", "📊 Excel", "📝 Word (تقرير كامل)"],
                 horizontal=True
             )
 
             if st.button("🔄 تجهيز النتائج", type="primary"):
                 with st.spinner('جاري التجهيز...'):
-                    # Prepare results
-                    results_data = []
 
-                    # Social variables
-                    for var in st.session_state.social_vars:
-                        freq = df[var].value_counts()
-                        for cat, count in freq.items():
-                            results_data.append({
-                                'التحليل': 'إحصائيات وصفية',
-                                'المتغير': var,
-                                'الفئة': str(cat),
-                                'التكرار': count,
-                                'النسبة': round(count / len(df) * 100, 2)
-                            })
-
-                    # Factors
-                    for factor_name, items in st.session_state.factors.items():
-                        factor_score = df[items].mean(axis=1)
-                        trend = st.session_state.factor_trends.get(factor_name, {})
-
-                        results_data.append({
-                            'التحليل': 'تحليل المحاور',
-                            'المتغير': factor_name,
-                            'المتوسط': round(factor_score.mean(), 2),
-                            'الانحراف': round(factor_score.std(), 2),
-                            'الاتجاه': trend.get('trend', ''),
-                            'موافق%': trend.get('agreement_percent', 0)
-                        })
-
-                    results_df = pd.DataFrame(results_data)
-
-                    # Export
                     if export_format == "📄 CSV":
-                        csv = results_df.to_csv(index=False).encode('utf-8-sig')
-                        st.download_button(
-                            "📥 تحميل CSV",
-                            csv,
-                            f"نتائج_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            "text/csv",
-                            use_container_width=True
-                        )
+                        # Prepare results for CSV
+                        results_data = []
 
-                    else:  # Excel
+                        # Social variables
+                        for var in st.session_state.social_vars:
+                            if var in df.columns:
+                                freq = df[var].value_counts()
+                                for cat, count in freq.items():
+                                    results_data.append({
+                                        'التحليل': 'إحصائيات وصفية',
+                                        'المتغير': var,
+                                        'الفئة': str(cat),
+                                        'التكرار': count,
+                                        'النسبة': round(count/len(df)*100, 2)
+                                    })
+
+                        # Factors
+                        df_analysis = df.copy()
+                        for factor_name, items in st.session_state.factors.items():
+                            valid_items = []
+                            for item in items:
+                                if item in df_analysis.columns:
+                                    df_analysis[item] = pd.to_numeric(df_analysis[item], errors='coerce')
+                                    if not df_analysis[item].isna().all():
+                                        valid_items.append(item)
+
+                            if valid_items:
+                                factor_score = df_analysis[valid_items].mean(axis=1)
+                                trend = st.session_state.factor_trends.get(factor_name, {})
+
+                                results_data.append({
+                                    'التحليل': 'تحليل المحاور',
+                                    'المتغير': factor_name,
+                                    'المتوسط': round(factor_score.mean(), 2) if len(factor_score) > 0 else 0,
+                                    'الانحراف': round(factor_score.std(), 2) if len(factor_score) > 0 else 0,
+                                    'الاتجاه': trend.get('trend', ''),
+                                    'موافق%': trend.get('agreement_percent', 0)
+                                })
+
+                        if results_data:
+                            results_df = pd.DataFrame(results_data)
+                            csv = results_df.to_csv(index=False).encode('utf-8-sig')
+                            st.download_button(
+                                "📥 تحميل CSV",
+                                csv,
+                                f"نتائج_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                "text/csv",
+                                use_container_width=True
+                            )
+                        else:
+                            st.warning("⚠️ لا توجد نتائج للتصدير")
+
+                    elif export_format == "📊 Excel":
+                        # Prepare Excel file
                         output = BytesIO()
                         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                            results_df.to_excel(writer, sheet_name='النتائج', index=False)
+                            # Social variables sheet
+                            social_data = []
+                            for var in st.session_state.social_vars:
+                                if var in df.columns:
+                                    freq = df[var].value_counts()
+                                    for cat, count in freq.items():
+                                        social_data.append({
+                                            'المتغير': var,
+                                            'الفئة': str(cat),
+                                            'التكرار': count,
+                                            'النسبة': round(count/len(df)*100, 2)
+                                        })
+                            if social_data:
+                                pd.DataFrame(social_data).to_excel(writer, sheet_name='المتغيرات_الاجتماعية', index=False)
 
+                            # Factors sheet
+                            factors_data = []
+                            df_analysis = df.copy()
+                            for factor_name, items in st.session_state.factors.items():
+                                valid_items = []
+                                for item in items:
+                                    if item in df_analysis.columns:
+                                        df_analysis[item] = pd.to_numeric(df_analysis[item], errors='coerce')
+                                        if not df_analysis[item].isna().all():
+                                            valid_items.append(item)
+
+                                if valid_items:
+                                    factor_score = df_analysis[valid_items].mean(axis=1)
+                                    trend = st.session_state.factor_trends.get(factor_name, {})
+                                    factors_data.append({
+                                        'المحور': factor_name,
+                                        'المتوسط': round(factor_score.mean(), 2) if len(factor_score) > 0 else 0,
+                                        'الانحراف': round(factor_score.std(), 2) if len(factor_score) > 0 else 0,
+                                        'الاتجاه': trend.get('trend', ''),
+                                        'موافق%': trend.get('agreement_percent', 0)
+                                    })
+
+                            if factors_data:
+                                pd.DataFrame(factors_data).to_excel(writer, sheet_name='تحليل_المحاور', index=False)
+
+                            # Correlations sheet
                             if len(st.session_state.factors) >= 2:
-                                factors_df = pd.DataFrame({
-                                    name: df[items].mean(axis=1)
-                                    for name, items in st.session_state.factors.items()
-                                })
-                                factors_df.corr().to_excel(writer, sheet_name='الارتباطات')
+                                factors_corr = {}
+                                for name in st.session_state.factors.keys():
+                                    if name in df_analysis.columns:
+                                        factors_corr[name] = df_analysis[name].dropna()
 
+                                if len(factors_corr) >= 2:
+                                    factors_df = pd.DataFrame(factors_corr)
+                                    factors_df.corr().to_excel(writer, sheet_name='الارتباطات')
+
+                            # Info sheet
                             pd.DataFrame({
                                 'معلومة': ['عدد الحالات', 'عدد المتغيرات', 'تاريخ التقرير'],
                                 'القيمة': [len(df), len(df.columns), datetime.now().strftime('%Y-%m-%d')]
@@ -1614,42 +1929,55 @@ if st.session_state.data_loaded:
                             use_container_width=True
                         )
 
+                    else:  # Word
+                        if DOCX_AVAILABLE:
+                            word_data = create_word_report(
+                                df,
+                                st.session_state.social_vars,
+                                st.session_state.factors,
+                                st.session_state.factor_trends
+                            )
+                            if word_data:
+                                st.download_button(
+                                    "📥 تحميل تقرير Word",
+                                    word_data,
+                                    f"تقرير_تحليل_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    use_container_width=True
+                                )
+                            else:
+                                st.error("❌ خطأ في إنشاء تقرير Word")
+                        else:
+                            st.error("❌ مكتبة python-docx غير مثبتة. قم بتشغيل: pip install python-docx")
+
                     st.success("✅ تم تجهيز الملف")
 
     # ============================================
-    # Tab 7: Contact - Simplified
+    # Tab 8: Contact - Updated with new message
     # ============================================
-    with tabs[6]:
+    with tabs[7]:
         st.markdown("""
         <div class='contact-info'>
-            <h3>📬 تواصل معنا للاستفسار</h3>
-            <p>نرحب باستفساراتكم وملاحظاتكم حول التطبيق</p>
-            <p>سيتم الرد على جميع الاستفسارات عبر البريد الإلكتروني</p>
-
-            <div class='email-link'>
-                📧 <a href='mailto:boutoubaamed@gmail.com'>boutoubaamed@gmail.com</a>
-            </div>
+            <h3>📬 مرحبا بكم</h3>
+            <p>لدعم التطبيق بإفادتنا بالملاحظات أو النقائص</p>
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("### ✍️ أرسل استفسارك")
+        st.markdown("### ✍️ أرسل ملاحظاتك")
 
         with st.form("contact_form"):
-            name = st.text_input("الاسم *", placeholder="أدخل اسمك")
-            email = st.text_input("البريد الإلكتروني *", placeholder="لنتمكن من الرد عليك")
-            message = st.text_area("الرسالة *", placeholder="اكتب استفسارك هنا...", height=150)
+            name = st.text_input("الاسم", placeholder="أدخل اسمك")
+            message = st.text_area("الملاحظات", placeholder="اكتب ملاحظاتك أو النقائص التي لاحظتها...", height=150)
 
             col1, col2, col3 = st.columns(3)
             with col2:
-                submitted = st.form_submit_button("📨 إرسال الاستفسار", type="primary", use_container_width=True)
+                submitted = st.form_submit_button("📨 إرسال", type="primary", use_container_width=True)
 
             if submitted:
-                if not name or not email or not message:
-                    st.warning("⚠️ الرجاء ملء جميع الحقول المطلوبة (*)")
-                elif '@' not in email:
-                    st.error("❌ البريد الإلكتروني غير صحيح")
+                if not name or not message:
+                    st.warning("⚠️ الرجاء ملء جميع الحقول")
                 else:
-                    success, msg = send_email(name, email, message)
+                    success, msg = send_email(name, message)
                     if success:
                         st.success(msg)
                         st.balloons()
@@ -1666,23 +1994,23 @@ if not st.session_state.data_loaded:
         <p style='font-size: 1.3em; margin-bottom: 30px;'>قم بتحميل بياناتك للبدء في التحليل الإحصائي المتكامل</p>
         <div style='display: flex; justify-content: center; gap: 20px; flex-wrap: wrap;'>
             <div style='background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;'>
-                <h3>📊 تحليل الاتجاه</h3>
+                <h3>📊 تحليل وصفي</h3>
+            </div>
+            <div style='background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;'>
+                <h3>📈 تحليل الاتجاه</h3>
             </div>
             <div style='background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;'>
                 <h3>🔬 اختبارات معلمية</h3>
             </div>
             <div style='background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;'>
-                <h3>📈 اختبارات لا معلمية</h3>
-            </div>
-            <div style='background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;'>
-                <h3>🔄 تحليل متقدم</h3>
+                <h3>📉 اختبارات لا معلمية</h3>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
 # ============================================
-# Footer
+# Footer with updated version
 # ============================================
 st.markdown("---")
 
@@ -1691,7 +2019,7 @@ footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
 with footer_col1:
     st.markdown("""
     <div style='text-align: center; padding: 10px;'>
-        <p>📊 الإصدار 4.0</p>
+        <p>📊 إصدار تجريبي</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1700,7 +2028,6 @@ with footer_col2:
     <div style='text-align: center; padding: 10px;'>
         <p>© 2024 جامعة عين تموشنت - جميع الحقوق محفوظة</p>
         <p style='font-size: 0.8em; opacity: 0.7;'>تم التطوير بواسطة أ.د محمد بوطوبة</p>
-        <p style='font-size: 0.8em; opacity: 0.7;'>للاستفسار: boutoubaamed@gmail.com</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1710,7 +2037,6 @@ with footer_col3:
         <a href='mailto:boutoubaamed@gmail.com' style='margin: 0 5px; text-decoration: none; font-size: 24px;' title='بريد'>📧</a>
     </div>
     """, unsafe_allow_html=True)
-
 
 # ============================================
 # Main function
@@ -1725,7 +2051,6 @@ def main():
                 st.sidebar.info("ℹ️ يرجى تحديد المحاور في تبويب 'تحديد المتغيرات'")
     except Exception as e:
         st.error(f"❌ حدث خطأ: {str(e)}")
-
 
 if __name__ == "__main__":
     main()
